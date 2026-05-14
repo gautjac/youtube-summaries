@@ -1,0 +1,66 @@
+name: YouTube ingest watchdog
+
+# Runs 2 hours after the scheduled ingest. If the ingest didn't complete
+# today (GitHub Actions cron occasionally skips), the watchdog triggers
+# it manually and opens an issue so you know it was late.
+
+on:
+  schedule:
+    # Daily at 15:00 UTC = 12:00 Halifax (ADT), 2 hours after the ingest cron.
+    - cron: '0 15 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write   # trigger the ingest workflow
+      issues: write    # open an issue
+
+    steps:
+      - name: Check if ingest ran today
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const today = new Date().toISOString().slice(0, 10);
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ingest.yml',
+              created: `>=${today}`,
+              status: 'completed',
+              per_page: 1,
+            });
+
+            if (data.total_count > 0) {
+              console.log(`Ingest already ran today (${data.workflow_runs[0].created_at}). Nothing to do.`);
+              return;
+            }
+
+            console.log('No completed ingest run found for today. Triggering manually.');
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ingest.yml',
+              ref: 'main',
+            });
+
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/ingest.yml`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `YouTube ingest missed schedule: ${today}`,
+              body: [
+                `The daily YouTube ingestion did not run on its 10:00 AM ADT schedule today.`,
+                ``,
+                `The watchdog triggered it manually at ${new Date().toISOString().slice(11, 16)} UTC.`,
+                `This is a known GitHub Actions cron reliability issue — no code is broken.`,
+                ``,
+                `[View ingest runs](${runUrl})`,
+              ].join('\n'),
+              labels: ['ingestion'],
+            });
+
+            console.log('Ingest triggered and issue opened.');

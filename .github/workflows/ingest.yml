@@ -1,0 +1,102 @@
+name: YouTube ingestion
+
+on:
+  schedule:
+    # Daily at 13:00 UTC = 10:00 Halifax (ADT). Cron is UTC on GitHub Actions.
+    # Picked an hour after the podcast-summaries cron so the two ingests
+    # don't share a peak window.
+    - cron: '0 13 * * *'
+  workflow_dispatch: {}  # allow manual runs from the Actions tab
+
+concurrency:
+  group: youtube-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # push commits back to the repo
+      issues: write     # open an issue on failure
+
+    env:
+      CI: "true"
+      # Secrets (set via: gh secret set <NAME> -R gautjac/youtube-summaries)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # Skip Whisper by default — captions cover ~95% of videos and Whisper
+      # at ~$0.006/min adds up. Set this to "" to re-enable.
+      YT_SKIP_WHISPER: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install ffmpeg (for TTS chunking) + yt-dlp (transcript fallback)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod +x /usr/local/bin/yt-dlp
+          yt-dlp --version
+
+      - name: Setup Python (for edge-tts)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install edge-tts
+        run: pip install --user edge-tts && echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync channel catalog from Firestore
+        run: npm run fetch
+
+      - name: Check channels for new videos
+        run: node scripts/check-channels.cjs
+
+      - name: Summarize + generate audio + upload to R2
+        run: node scripts/summarize-queue.cjs
+
+      - name: Commit and push if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stage tracked files only; audio/thumbnails are gitignored — they
+          # were already uploaded to R2 by the previous step.
+          git add src/data/videos.json scripts/video-tracker.json scripts/video-queue.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            NEW_COUNT=$(git diff --cached src/data/videos.json | grep -cE '^\+ *"id":' || true)
+            git commit -m "Ingest: +${NEW_COUNT} video(s)"
+            git push
+          fi
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `YouTube ingestion failed: ${new Date().toISOString().slice(0,10)}`,
+              body: `The scheduled YouTube ingestion workflow failed.\n\nRun: ${runUrl}\n\nCheck the logs, then re-run via the Actions tab once the underlying issue is fixed.`,
+              labels: ['ingestion']
+            });
