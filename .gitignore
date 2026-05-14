@@ -6,8 +6,8 @@ dist/
 .netlify/
 .DS_Store
 scripts/video-queue.json
-scripts/video-tracker.json
 scripts/.video-cache/
+# video-tracker.json IS committed so seen-video memory persists across CI runs.
 public/audio/*.mp3
 public/images/thumbs/*.jpg
 *.log

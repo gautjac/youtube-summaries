@@ -76,13 +76,17 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Stage tracked files only; audio/thumbnails are gitignored — they
-          # were already uploaded to R2 by the previous step.
-          git add src/data/videos.json scripts/video-tracker.json scripts/video-queue.json
+          # Stage only what may have changed. Audio/thumbnails are gitignored
+          # (already uploaded to R2). The tracker is committed so CI can
+          # remember which video IDs it's seen on each channel.
+          # `--` then `:(glob,exclude...)` would be cleaner; instead, add each
+          # path only if present.
+          [ -f src/data/videos.json ] && git add src/data/videos.json || true
+          [ -f scripts/video-tracker.json ] && git add scripts/video-tracker.json || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            NEW_COUNT=$(git diff --cached src/data/videos.json | grep -cE '^\+ *"id":' || true)
+            NEW_COUNT=$(git diff --cached src/data/videos.json 2>/dev/null | grep -cE '^\+ *"id":' || true)
             git commit -m "Ingest: +${NEW_COUNT} video(s)"
             git push
           fi
