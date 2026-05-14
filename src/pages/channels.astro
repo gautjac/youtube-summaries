@@ -325,6 +325,70 @@ const channels = (channelsData.channels || []).slice().sort((a, b) =>
     const COLLECTION = 'youtube_channels';
     const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT}/databases/(default)/documents`;
 
+    // ─── Live catalog hydration ─────────────────────────────────────────────
+    // The SSR list is whatever was in src/data/channels.json at build time.
+    // Firestore is the source of truth — newly-added channels show up here
+    // only after the next CI sync rebuilds the JSON. To make adds feel
+    // immediate, fetch Firestore on load and replace the list.
+    function escHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function renderChannelRow(c) {
+      const minutes = Math.round((c.minLengthSec || 300) / 60);
+      const skipTag = c.skipReuploads ? ' · skips re-uploads' : '';
+      const openLink = c.url ? `<a class="icon-btn" href="${escHtml(c.url)}" target="_blank" rel="noopener">Open</a>` : '';
+      return `
+        <div class="channel-row" data-channel-id="${escHtml(c.id)}">
+          <div class="channel-avatar">${c.icon ? `<img src="${escHtml(c.icon)}" alt="" loading="lazy" />` : ''}</div>
+          <div class="channel-info">
+            <div class="channel-name">${escHtml(c.name)}</div>
+            <div class="channel-sub">${escHtml(c.handle || c.id)} · min ${minutes}m${skipTag}</div>
+          </div>
+          <div class="channel-actions">
+            ${openLink}
+            <button class="icon-btn" data-action="edit" data-channel-id="${escHtml(c.id)}">Edit</button>
+            <button class="icon-btn danger" data-action="delete" data-channel-id="${escHtml(c.id)}">Remove</button>
+          </div>
+        </div>
+      `;
+    }
+    async function refreshChannels() {
+      const list = document.getElementById('channel-list');
+      const count = document.getElementById('count');
+      try {
+        const res = await fetch(`${FIRESTORE_BASE}/${COLLECTION}?key=${FIREBASE_API_KEY}&pageSize=500`);
+        if (!res.ok) return; // 403/404 → keep SSR fallback
+        const data = await res.json();
+        const channels = (data.documents || []).map(doc => {
+          const id = doc.name.split('/').pop();
+          const f = doc.fields || {};
+          return {
+            id,
+            name: f.name?.stringValue || id,
+            handle: f.handle?.stringValue || '',
+            icon: f.icon?.stringValue || '',
+            description: f.description?.stringValue || '',
+            url: f.url?.stringValue || '',
+            minLengthSec: f.minLengthSec?.integerValue ? parseInt(f.minLengthSec.integerValue, 10) : 300,
+            skipReuploads: !!f.skipReuploads?.booleanValue,
+          };
+        }).sort((a, b) => a.name.localeCompare(b.name));
+
+        if (count) count.textContent = `${channels.length} channel${channels.length === 1 ? '' : 's'}`;
+        if (!channels.length) {
+          list.innerHTML = `
+            <div class="empty">
+              <h2>No channels yet.</h2>
+              <p>Click "+ Add channel" and paste a YouTube channel URL, an <code>@handle</code>, or a <code>UC...</code> id. The lookup runs against YouTube's public pages — no API key, no quota.</p>
+            </div>`;
+        } else {
+          list.innerHTML = channels.map(renderChannelRow).join('');
+        }
+      } catch (err) {
+        console.error('refreshChannels failed:', err);
+      }
+    }
+
     const modal = document.getElementById('modal');
     const lookupInput = document.getElementById('lookup-input');
     const lookupBtn = document.getElementById('lookup-btn');
@@ -405,7 +469,7 @@ const channels = (channelsData.channels || []).slice().sort((a, b) =>
           const res = await fetch(`${FIRESTORE_BASE}/${COLLECTION}/${id}?key=${FIREBASE_API_KEY}`, { method: 'DELETE' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           showToast('Removed');
-          setTimeout(() => location.reload(), 600);
+          refreshChannels();
         } catch (err) {
           showToast('Delete failed');
         }
@@ -495,7 +559,7 @@ const channels = (channelsData.channels || []).slice().sort((a, b) =>
         }
         showToast('Saved');
         closeModal();
-        setTimeout(() => location.reload(), 700);
+        refreshChannels();
       } catch (err) {
         saveStatus.classList.add('error');
         saveStatus.textContent = err.message || 'Save failed';
@@ -503,6 +567,10 @@ const channels = (channelsData.channels || []).slice().sort((a, b) =>
         saveBtn.disabled = false;
       }
     });
+
+    // Hydrate from Firestore on load so manual adds appear immediately
+    // (without needing a Netlify rebuild).
+    refreshChannels();
   </script>
 </body>
 </html>
