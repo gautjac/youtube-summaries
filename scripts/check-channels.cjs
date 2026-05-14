@@ -318,16 +318,23 @@ async function main() {
     const minLen = Number(channel.minLengthSec) || DEFAULT_MIN_LENGTH;
 
     for (const entry of candidates.slice(0, MAX_PER_CHANNEL * 3)) {
-      // Mark as seen up front — we don't want to re-check the same video on
-      // every run even if it gets filtered.
-      seenSet.add(entry.videoId);
-
+      // Title-based filters can be evaluated without a network call, so
+      // we can confidently mark seen and move on.
       if (skipReuploads && isReuploadTitle(entry.title)) {
+        seenSet.add(entry.videoId);
         continue;
       }
 
       const meta = await fetchVideoMeta(entry.videoId);
+      // Transient failure — don't mark seen, so a future run can retry.
+      // (Previously this branch silently dropped videos forever after one
+      //  CI rate-limit blip.)
       if (!meta) continue;
+
+      // From here on we successfully evaluated the video, so mark seen
+      // regardless of whether it passes filters.
+      seenSet.add(entry.videoId);
+
       if (meta.isLive) continue;
       if (meta.isShort) continue;
       if (meta.durationSec !== null && meta.durationSec < minLen) continue;
