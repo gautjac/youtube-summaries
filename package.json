@@ -1,0 +1,18 @@
+{
+  "name": "youtube-summaries",
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "fetch": "node scripts/fetch-data.js",
+    "dev": "npm run fetch && astro dev",
+    "build": "npm run fetch && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1029.0",
+    "astro": "^4.0.0"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.5"
+  }
+}

@@ -1,0 +1,253 @@
+---
+import videosData from '../data/videos.json';
+import channelsData from '../data/channels.json';
+
+const channelMap = new Map((channelsData.channels || []).map(c => [c.id, c]));
+
+const allVideos = (videosData.videos || [])
+  .map(v => {
+    const channel = channelMap.get(v.channelId);
+    return {
+      ...v,
+      channelName: channel?.name || v.channelName || v.channelId,
+      thumbUrl: v.thumb && /^https?:\/\//.test(v.thumb)
+        ? v.thumb
+        : (v.thumb || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`),
+    };
+  })
+  .sort((a, b) => new Date(b.published || b.date) - new Date(a.published || a.date));
+---
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Watched · YouTube Summaries</title>
+  <meta name="theme-color" content="#0e0e10" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style is:global>
+    :root {
+      --bg: #0e0e10;
+      --bg-lift: #141418;
+      --text: #ece8e1;
+      --text-mid: #8a857d;
+      --text-dim: #4c4944;
+      --hairline: rgba(236, 232, 225, 0.08);
+      --hairline-strong: rgba(236, 232, 225, 0.18);
+      --accent: #c9a674;
+      --accent-dim: rgba(201, 166, 116, 0.15);
+      --font-sans: 'Onest', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --max-width: 720px;
+      --page-pad: 28px;
+      --kicker-tracking: 0.16em;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { background: var(--bg); color: var(--text); }
+    body {
+      font-family: var(--font-sans);
+      font-size: 15px; line-height: 1.62;
+      -webkit-font-smoothing: antialiased;
+      padding: 56px var(--page-pad) 140px;
+      min-height: 100vh;
+    }
+    .container { max-width: var(--max-width); margin: 0 auto; }
+    header { margin-bottom: 56px; }
+    header .kicker {
+      font-size: 11px; font-weight: 500;
+      letter-spacing: var(--kicker-tracking);
+      text-transform: uppercase;
+      color: var(--text-mid);
+    }
+    header h1 { margin-top: 4px; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+    header p { margin-top: 8px; font-size: 13px; color: var(--text-mid); }
+    header nav {
+      margin-top: 22px; display: flex; gap: 18px;
+      font-size: 11px;
+      letter-spacing: var(--kicker-tracking);
+      text-transform: uppercase;
+    }
+    header nav a {
+      color: var(--text-mid); text-decoration: none;
+      border-bottom: 1px solid transparent;
+      padding-bottom: 2px;
+      transition: color 180ms, border-color 180ms;
+    }
+    header nav a:hover { color: var(--text); }
+    header nav a.current { color: var(--text); border-bottom-color: var(--text); }
+
+    .empty {
+      padding: 80px 0; text-align: center; color: var(--text-mid);
+    }
+    .empty h2 { font-size: 18px; color: var(--text); margin-bottom: 12px; }
+    .empty p { font-size: 13px; max-width: 440px; margin: 0 auto; }
+
+    .archive-list { display: flex; flex-direction: column; gap: 18px; }
+    .archive-row {
+      display: grid;
+      grid-template-columns: 120px 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--hairline);
+      opacity: 0.85;
+    }
+    .archive-row.hidden { display: none; }
+    .archive-thumb {
+      width: 120px; aspect-ratio: 16/9;
+      border-radius: 3px; overflow: hidden;
+      background: var(--bg-lift);
+    }
+    .archive-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .archive-info { min-width: 0; }
+    .archive-title {
+      font-size: 14px; font-weight: 600;
+      line-height: 1.3;
+      color: var(--text);
+      text-decoration: line-through;
+      text-decoration-thickness: 1px;
+      text-decoration-color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .archive-title a { color: inherit; text-decoration-color: var(--text-dim); }
+    .archive-meta {
+      font-size: 11px;
+      color: var(--text-mid);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .icon-btn {
+      background: none; border: none;
+      color: var(--text-dim);
+      font: inherit; font-size: 10px;
+      letter-spacing: var(--kicker-tracking);
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 6px 8px;
+      transition: color 180ms;
+    }
+    .icon-btn:hover { color: var(--text); }
+
+    .toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-lift);
+      border: 1px solid var(--hairline-strong);
+      color: var(--text);
+      padding: 10px 18px;
+      font-size: 12px;
+      border-radius: 4px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 240ms;
+      z-index: 30;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <span class="kicker">Archive</span>
+      <h1>Watched</h1>
+      <p>Videos you've marked watched. Synced from Firestore.</p>
+      <nav>
+        <a href="/">Feed</a>
+        <a href="/channels">Channels</a>
+        <a href="/watched" class="current">Watched</a>
+      </nav>
+    </header>
+
+    <div class="archive-list" id="archive-list">
+      <div class="empty" id="empty-state">
+        <h2>Loading watched videos…</h2>
+        <p>Pulling watched state from Firestore.</p>
+      </div>
+      {allVideos.map(v => (
+        <div class="archive-row hidden" data-video-id={v.videoId}>
+          <a class="archive-thumb" href={v.link} target="_blank" rel="noopener">
+            <img src={v.thumbUrl} alt="" loading="lazy" />
+          </a>
+          <div class="archive-info">
+            <div class="archive-title">
+              <a href={v.link} target="_blank" rel="noopener">{v.title}</a>
+            </div>
+            <div class="archive-meta">
+              {v.channelName} · {v.date}
+            </div>
+          </div>
+          <button class="icon-btn unwatch-btn" data-video-id={v.videoId}>Restore</button>
+        </div>
+      ))}
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script is:inline>
+    const FIREBASE_API_KEY = 'AIzaSyDBLCnPauZJeg2JGriKp9KM-QFjYmSf12s';
+    const FIREBASE_PROJECT = 'charlotte-dashboard';
+    const COLLECTION = 'youtube_watched';
+    const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT}/databases/(default)/documents`;
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => el.classList.remove('show'), 1800);
+    }
+
+    async function loadWatched() {
+      const empty = document.getElementById('empty-state');
+      const watched = new Set();
+      try {
+        const res = await fetch(`${FIRESTORE_BASE}/${COLLECTION}?key=${FIREBASE_API_KEY}&pageSize=500`);
+        if (res.ok) {
+          const data = await res.json();
+          for (const d of (data.documents || [])) {
+            const id = d.fields?.videoId?.stringValue;
+            if (id) watched.add(id);
+          }
+        }
+        // Anything else (403 on a brand-new collection, 404, etc) is treated
+        // as "nothing watched yet" — the empty state is more useful than the
+        // raw error.
+      } catch {
+        // Network failure also collapses to the empty state.
+      }
+      let shown = 0;
+      document.querySelectorAll('.archive-row').forEach(row => {
+        if (watched.has(row.dataset.videoId)) {
+          row.classList.remove('hidden');
+          shown++;
+        }
+      });
+      if (shown === 0) {
+        empty.innerHTML = '<h2>Nothing watched yet.</h2><p>Mark a video watched on the feed and it will show up here.</p>';
+      } else {
+        empty.style.display = 'none';
+      }
+    }
+
+    document.getElementById('archive-list').addEventListener('click', async e => {
+      const btn = e.target.closest('.unwatch-btn');
+      if (!btn) return;
+      const id = btn.dataset.videoId;
+      btn.disabled = true;
+      try {
+        await fetch(`${FIRESTORE_BASE}/${COLLECTION}/${id}?key=${FIREBASE_API_KEY}`, { method: 'DELETE' });
+        const row = btn.closest('.archive-row');
+        if (row) row.classList.add('hidden');
+        showToast('Restored');
+      } catch (err) {
+        showToast('Failed');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    loadWatched();
+  </script>
+</body>
+</html>

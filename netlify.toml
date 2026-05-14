@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Skip secrets scanning — Firebase public API keys are meant to be exposed
+  SECRETS_SCAN_ENABLED = "false"
