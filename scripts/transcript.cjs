@@ -151,43 +151,63 @@ function vttToText(vtt) {
   return out.join(' ').replace(/\s+/g, ' ').trim();
 }
 
+// Player clients to try, in order. YouTube's bot-detection blocks different
+// clients in different ways from different IP ranges, so we iterate until
+// one yields a non-empty .vtt:
+//   - tv_embedded:  YouTube TV app; tends to bypass GHA bot-walls and
+//                   serves full captions where android gets "Sign in".
+//   - web_safari:   Mac Safari client; another reliable fallback.
+//   - mweb:         mobile web; sometimes captions-only.
+//   - android:      keeps working from residential IPs.
+//   - ios:          last-ditch.
+// Override via env YT_PLAYER_CLIENTS="tv_embedded,web_safari".
+const PLAYER_CLIENTS = (process.env.YT_PLAYER_CLIENTS || 'tv_embedded,web_safari,mweb,android,ios')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+function runYtDlpSubtitles(ytdlp, videoId, client, dir) {
+  const args = [
+    '--write-auto-sub', '--write-sub',
+    '--sub-lang', 'en.*',
+    '--sub-format', 'vtt',
+    '--skip-download',
+    '--no-warnings',
+    '--extractor-args', `youtube:player_client=${client}`,
+    '-o', path.join(dir, '%(id)s.%(ext)s'),
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
+  const result = spawnSync(ytdlp, args, { encoding: 'utf8' });
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.vtt'));
+  // Drop zero-byte files immediately — some clients write a stub vtt.
+  const sized = files
+    .map(f => ({ f, size: fs.statSync(path.join(dir, f)).size }))
+    .filter(x => x.size > 200);
+  return { sized, stderr: (result.stderr || '').slice(0, 300), exit: result.status };
+}
+
 async function tier2YtDlp(videoId) {
   const ytdlp = whichSync('yt-dlp');
   if (!ytdlp) throw new Error('yt-dlp not on PATH');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-summ-'));
+  const tries = [];
   try {
-    // `youtube:player_client=android` avoids the InnerTube-impersonation
-    // requirement that's been turning the default web client into an
-    // exit-1 path. The android client still serves auto-captions reliably.
-    const args = [
-      '--write-auto-sub', '--write-sub',
-      '--sub-lang', 'en.*',
-      '--sub-format', 'vtt',
-      '--skip-download',
-      '--no-warnings',
-      '--extractor-args', 'youtube:player_client=android',
-      '-o', path.join(dir, '%(id)s.%(ext)s'),
-      `https://www.youtube.com/watch?v=${videoId}`,
-    ];
-    const result = spawnSync(ytdlp, args, { encoding: 'utf8' });
-
-    // Some yt-dlp configurations exit non-zero (impersonation warning, etc.)
-    // even after the .vtt is written. Don't gate on exit code — gate on
-    // whether a usable .vtt actually landed in the temp dir.
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.vtt'));
-    if (!files.length) {
-      const stderr = (result.stderr || '').slice(0, 300).replace(/\n/g, ' ');
-      throw new Error(`no .vtt produced (exit ${result.status}: ${stderr})`);
+    for (const client of PLAYER_CLIENTS) {
+      // Clean the dir between clients so we don't pick up leftover stubs.
+      for (const f of fs.readdirSync(dir)) {
+        try { fs.unlinkSync(path.join(dir, f)); } catch {}
+      }
+      const { sized, stderr, exit } = runYtDlpSubtitles(ytdlp, videoId, client, dir);
+      if (sized.length) {
+        sized.sort((a, b) => a.f.length - b.f.length);
+        const vtt = fs.readFileSync(path.join(dir, sized[0].f), 'utf8');
+        const text = vttToText(vtt);
+        if (text) return { source: `yt-dlp(${client})`, text, lang: 'en' };
+        tries.push(`${client}: vtt parsed empty`);
+      } else {
+        tries.push(`${client}: ${stderr.replace(/\n/g, ' ').slice(0, 120) || `exit ${exit}`}`);
+      }
     }
-
-    // Prefer manually authored .en.vtt over auto-generated .en.*.vtt
-    // (shorter filenames are typically the manual ones).
-    files.sort((a, b) => a.length - b.length);
-    const vtt = fs.readFileSync(path.join(dir, files[0]), 'utf8');
-    const text = vttToText(vtt);
-    if (!text) throw new Error('vtt parsed empty');
-    return { source: 'yt-dlp', text, lang: 'en' };
+    throw new Error(`all clients failed: ${tries.join(' | ')}`);
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
