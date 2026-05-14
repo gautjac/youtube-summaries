@@ -165,18 +165,26 @@ const PLAYER_CLIENTS = (process.env.YT_PLAYER_CLIENTS || 'tv_embedded,web_safari
   .split(',').map(s => s.trim()).filter(Boolean);
 
 function runYtDlpSubtitles(ytdlp, videoId, client, dir) {
+  const hasCookies = process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE);
   const args = [
     '--write-auto-sub', '--write-sub',
-    '--sub-lang', 'en.*',
-    '--sub-format', 'vtt',
+    '--sub-langs', 'en.*',
+    // Prefer vtt but accept whatever's offered. Forcing vtt-only errors
+    // with "Requested format is not available" when the authenticated
+    // response only exposes srv3/ttml.
+    '--sub-format', 'vtt/best',
     '--skip-download',
     '--no-warnings',
-    '--extractor-args', `youtube:player_client=${client}`,
   ];
-  // YT_COOKIES_FILE: path to a Netscape-format cookies.txt. Required to
-  // bypass YouTube's "Sign in to confirm you're not a bot" wall on
-  // GitHub Actions IPs. Locally optional.
-  if (process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE)) {
+  // Cookies + a forced player_client tend to fight each other: the cookies
+  // imply a session, the override picks a client that doesn't honor it,
+  // and yt-dlp falls into "Requested format is not available". When we
+  // have cookies, let yt-dlp pick the client itself (defaults to `web`,
+  // which the cookies authenticate). Only force a client unauthenticated.
+  if (!hasCookies) {
+    args.push('--extractor-args', `youtube:player_client=${client}`);
+  }
+  if (hasCookies) {
     args.push('--cookies', process.env.YT_COOKIES_FILE);
   }
   args.push(
@@ -195,11 +203,17 @@ function runYtDlpSubtitles(ytdlp, videoId, client, dir) {
 async function tier2YtDlp(videoId) {
   const ytdlp = whichSync('yt-dlp');
   if (!ytdlp) throw new Error('yt-dlp not on PATH');
+  const hasCookies = process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE);
+
+  // With cookies, yt-dlp's default web client gets the captions in one shot
+  // (and the per-client cycling actually breaks it). Without cookies we
+  // need the fallback chain to dodge per-client bot-walling.
+  const clients = hasCookies ? ['default'] : PLAYER_CLIENTS;
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-summ-'));
   const tries = [];
   try {
-    for (const client of PLAYER_CLIENTS) {
+    for (const client of clients) {
       // Clean the dir between clients so we don't pick up leftover stubs.
       for (const f of fs.readdirSync(dir)) {
         try { fs.unlinkSync(path.join(dir, f)); } catch {}
@@ -207,10 +221,13 @@ async function tier2YtDlp(videoId) {
       const { sized, stderr, exit } = runYtDlpSubtitles(ytdlp, videoId, client, dir);
       if (sized.length) {
         sized.sort((a, b) => a.f.length - b.f.length);
-        const vtt = fs.readFileSync(path.join(dir, sized[0].f), 'utf8');
-        const text = vttToText(vtt);
+        const file = sized[0].f;
+        const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+        const text = file.endsWith('.vtt')
+          ? vttToText(raw)
+          : subtitleToText(raw);
         if (text) return { source: `yt-dlp(${client})`, text, lang: 'en' };
-        tries.push(`${client}: vtt parsed empty`);
+        tries.push(`${client}: subtitle parsed empty`);
       } else {
         tries.push(`${client}: ${stderr.replace(/\n/g, ' ').slice(0, 120) || `exit ${exit}`}`);
       }
@@ -219,6 +236,31 @@ async function tier2YtDlp(videoId) {
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
+}
+
+// Generic subtitle-to-text for srv3 / ttml / json3 / other formats yt-dlp
+// might write when vtt isn't available. Strips tags, collapses whitespace.
+function subtitleToText(raw) {
+  // JSON3 (YouTube native): { events: [{ segs: [{ utf8: "..." }] }] }
+  if (raw.trimStart().startsWith('{')) {
+    try {
+      const j = JSON.parse(raw);
+      const out = [];
+      for (const ev of (j.events || [])) {
+        for (const seg of (ev.segs || [])) {
+          if (seg.utf8) out.push(seg.utf8);
+        }
+      }
+      return out.join(' ').replace(/\s+/g, ' ').trim();
+    } catch {}
+  }
+  // Anything XML-ish (srv3, ttml): strip tags
+  return raw
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // ─── TIER 3: Whisper fallback ───────────────────────────────────────────────
