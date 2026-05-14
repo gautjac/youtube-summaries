@@ -479,6 +479,11 @@ async function main() {
     }
 
     // 6. Append to DB
+    // Paths are stored as R2-relative keys (no leading slash). The Astro
+    // URL builder prepends PUBLIC_AUDIO_BASE / PUBLIC_THUMB_BASE at render.
+    const audioKey = `youtube/audio/${path.basename(v.audioFile)}`;
+    const thumbKey = thumbLocalPath ? `youtube/thumbs/${v.videoId}.jpg` : v.thumb;
+
     const record = {
       id: nextId(data),
       videoId: v.videoId,
@@ -489,10 +494,10 @@ async function main() {
       published: v.published,
       durationSec: v.durationSec || null,
       link: v.link,
-      thumb: thumbLocalPath ? `/images/thumbs/${v.videoId}.jpg` : v.thumb,
+      thumb: thumbKey,
       summary,
       forYou,
-      audioFile: v.audioFile,
+      audioFile: audioKey,
       audioExists,
       transcriptSource: transcriptInfo.source,
     };

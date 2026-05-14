@@ -5,18 +5,23 @@ import channelsData from '../data/channels.json';
 const AUDIO_BASE = import.meta.env.PUBLIC_AUDIO_BASE || '';
 const THUMB_BASE = import.meta.env.PUBLIC_THUMB_BASE || '';
 
+// Records store R2-relative paths like "youtube/audio/...mp3" and
+// "youtube/thumbs/...jpg". Prepend the base; fall back to YouTube's
+// CDN thumbnail when none was downloaded.
 function resolveAudioUrl(audioFile) {
   if (!audioFile) return '';
   if (/^https?:\/\//i.test(audioFile)) return audioFile;
-  if (!AUDIO_BASE) return audioFile;
-  return `${AUDIO_BASE}/${audioFile.replace(/^\//, '')}`;
+  const path = audioFile.replace(/^\//, '');
+  if (!AUDIO_BASE) return '/' + path;
+  return `${AUDIO_BASE}/${path}`;
 }
 
 function resolveThumbUrl(thumb, videoId) {
   if (!thumb) return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
   if (/^https?:\/\//i.test(thumb)) return thumb;
-  if (!THUMB_BASE) return thumb;
-  return `${THUMB_BASE}/${thumb.replace(/^\//, '')}`;
+  const path = thumb.replace(/^\//, '');
+  if (!THUMB_BASE) return '/' + path;
+  return `${THUMB_BASE}/${path}`;
 }
 
 function formatDuration(sec) {
