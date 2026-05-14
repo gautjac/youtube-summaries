@@ -169,18 +169,18 @@ function runYtDlpSubtitles(ytdlp, videoId, client, dir) {
   const args = [
     '--write-auto-sub', '--write-sub',
     '--sub-langs', 'en.*',
-    // Prefer vtt but accept whatever's offered. Forcing vtt-only errors
-    // with "Requested format is not available" when the authenticated
-    // response only exposes srv3/ttml.
-    '--sub-format', 'vtt/best',
     '--skip-download',
+    // --ignore-no-formats-error: yt-dlp still does some format validation
+    // even with --skip-download, and an authenticated session sometimes
+    // serves a manifest yt-dlp can't pick from, triggering "Requested
+    // format is not available". This flag tells it to proceed with the
+    // subtitle write anyway.
+    '--ignore-no-formats-error',
+    // Normalize whatever format comes back to vtt. Avoids the "vtt
+    // unavailable" error when the response only exposes srv3/ttml.
+    '--convert-subs', 'vtt',
     '--no-warnings',
   ];
-  // Cookies + a forced player_client tend to fight each other: the cookies
-  // imply a session, the override picks a client that doesn't honor it,
-  // and yt-dlp falls into "Requested format is not available". When we
-  // have cookies, let yt-dlp pick the client itself (defaults to `web`,
-  // which the cookies authenticate). Only force a client unauthenticated.
   if (!hasCookies) {
     args.push('--extractor-args', `youtube:player_client=${client}`);
   }
