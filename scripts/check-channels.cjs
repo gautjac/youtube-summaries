@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const { execSync, spawnSync } = require('child_process');
 
 // ─── CONFIG ─────────────────────────────────────────────────────────────────
 
@@ -158,10 +159,45 @@ function loadExistingVideoIds() {
   }
 }
 
-// Fetch the watch page once to extract duration, livestream status, and
-// short-form detection. We need duration because RSS doesn't expose it.
-// Returns { durationSec, isLive, isShort } or null on failure.
+function whichSync(bin) {
+  try { return execSync(`command -v ${bin}`, { encoding: 'utf8' }).trim(); } catch { return ''; }
+}
+
+// Get duration, livestream status, and short-form flag for a video.
+// Prefers yt-dlp's Innertube metadata (reliable on CI; the watch-page HTML
+// gets HTTP 429'd from GitHub Actions runner IPs). Falls back to scraping
+// the watch page when yt-dlp isn't on PATH or returns nothing useful.
+// Returns { durationSec, isLive, isShort } or null on total failure.
 async function fetchVideoMeta(videoId) {
+  // ─── Path A: yt-dlp metadata JSON ─────────────────────────────────────
+  const ytdlp = whichSync('yt-dlp');
+  if (ytdlp) {
+    const result = spawnSync(ytdlp, [
+      '-j', '--skip-download', '--no-warnings',
+      '--extractor-args', 'youtube:player_client=android',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (result.stdout) {
+      try {
+        const d = JSON.parse(result.stdout);
+        const durationSec = typeof d.duration === 'number' ? Math.round(d.duration) : null;
+        const liveStatus = d.live_status || (d.is_live ? 'is_live' : null);
+        const isLive = liveStatus === 'is_live' || liveStatus === 'is_upcoming' || liveStatus === 'post_live';
+        // yt-dlp exposes a few short-form signals: webpage_url contains /shorts/,
+        // or the format width/height ratio is portrait with duration < 60s.
+        const url = d.webpage_url || d.original_url || '';
+        const portrait = (d.width && d.height && d.height > d.width);
+        const isShort = /\/shorts\//.test(url) ||
+          (durationSec !== null && durationSec < 60 && portrait) ||
+          (durationSec !== null && durationSec < 60);
+        return { durationSec, isLive, isShort };
+      } catch (err) {
+        // fall through to HTML scrape
+      }
+    }
+  }
+
+  // ─── Path B: watch-page HTML scrape (works locally; flaky on CI) ─────
   let html;
   try {
     html = await fetchUrl(`https://www.youtube.com/watch?v=${videoId}&hl=en`);
@@ -169,25 +205,15 @@ async function fetchVideoMeta(videoId) {
     console.log(`     ⚠️  meta fetch failed (${err.message})`);
     return null;
   }
-
-  // Duration — pulled from the embedded ytInitialPlayerResponse blob.
-  // Look for "lengthSeconds":"123" — present on every regular video.
   let durationSec = null;
   const lenMatch = html.match(/"lengthSeconds":"(\d+)"/);
   if (lenMatch) durationSec = parseInt(lenMatch[1], 10);
-
-  // Livestream status.
   const isLive =
     /"isLive":true/.test(html) ||
     /"isLiveContent":true/.test(html) ||
     /"isUpcoming":true/.test(html);
-
-  // Short detection — videos uploaded as Shorts have a canonical /shorts/
-  // URL. Vertical regular uploads can also be shorts; we additionally check
-  // duration < 60s as a backstop.
   const isShort = /\/shorts\//.test(html.slice(0, 50000)) ||
     (durationSec !== null && durationSec < 60);
-
   return { durationSec, isLive, isShort };
 }
 
