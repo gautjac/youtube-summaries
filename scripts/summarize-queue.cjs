@@ -181,6 +181,22 @@ function isDuplicate(data, videoId) {
   return (data.videos || []).some(v => v.videoId === videoId);
 }
 
+// Remove a videoId from the check-channels tracker so it gets retried on
+// the next run. Called when a video fails the transcript step — we don't
+// want a transient failure to make us blacklist the video forever.
+const TRACKER_FILE = path.join(__dirname, 'video-tracker.json');
+function unseenInTracker(channelId, videoId) {
+  let tracker;
+  try { tracker = JSON.parse(fs.readFileSync(TRACKER_FILE, 'utf8')); }
+  catch { return; }
+  const list = tracker.seenVideoIds?.[channelId];
+  if (!Array.isArray(list)) return;
+  const idx = list.indexOf(videoId);
+  if (idx === -1) return;
+  list.splice(idx, 1);
+  fs.writeFileSync(TRACKER_FILE, JSON.stringify(tracker, null, 2));
+}
+
 function getRecentForYouNotes(data, count = 6) {
   return (data.videos || [])
     .slice(0, count)
@@ -385,7 +401,13 @@ async function main() {
       console.log(`✓ ${transcriptInfo.source} · ${transcriptInfo.text.length} chars`);
     } catch (err) {
       console.log(`✗ ${err.message}`);
-      console.log('   ⏭️  Skipping — no transcript means no summary.\n');
+      console.log('   ⏭️  Skipping — no transcript means no summary.');
+      // Self-heal: remove the videoId from the tracker so the next run
+      // retries it. Without this, a transient transcript failure (rate
+      // limit, bot wall, etc.) would mark the video as seen-forever via
+      // check-channels.cjs and we'd never get a summary for it.
+      unseenInTracker(v.channelId, v.videoId);
+      console.log('   ↩  unmarked seen for retry next run.\n');
       continue;
     }
 
