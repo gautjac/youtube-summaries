@@ -30,6 +30,11 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # YT_COOKIES_B64: optional base64-encoded Netscape cookies.txt exported
+      # from a logged-in YouTube session. Required on GitHub Actions IPs to
+      # bypass the "Sign in to confirm you're not a bot" wall. Without it,
+      # every yt-dlp request fails and no videos can be summarized.
+      YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
       # Skip Whisper by default — captions cover ~95% of videos and Whisper
       # at ~$0.006/min adds up. Set this to "" to re-enable.
       YT_SKIP_WHISPER: "1"
@@ -51,6 +56,18 @@ jobs:
           sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod +x /usr/local/bin/yt-dlp
           yt-dlp --version
+
+      - name: Materialize YouTube cookies (if provided)
+        run: |
+          if [ -n "$YT_COOKIES_B64" ]; then
+            echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/yt-cookies.txt"
+            echo "YT_COOKIES_FILE=$RUNNER_TEMP/yt-cookies.txt" >> $GITHUB_ENV
+            echo "✓ Cookies file materialized ($(wc -l < $RUNNER_TEMP/yt-cookies.txt) lines)"
+          else
+            echo "⚠️  No YT_COOKIES_B64 secret set — yt-dlp may hit YouTube's bot wall."
+            echo "    Export cookies locally and run:"
+            echo "    base64 < cookies.txt | gh secret set YT_COOKIES_B64 -R gautjac/youtube-summaries"
+          fi
 
       - name: Setup Python (for edge-tts)
         uses: actions/setup-python@v5

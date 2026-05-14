@@ -108,6 +108,32 @@ youtube-summaries/
 
 The two collections live alongside the podcast app's `podcasts` and `podcast_listened` in the same Firestore project.
 
+## YouTube cookies (required on GitHub Actions)
+
+YouTube bot-walls GitHub Actions IPs with "Sign in to confirm you're not a bot" on every yt-dlp request. The fix: export a cookies.txt from a logged-in browser and add it as a GitHub Actions secret.
+
+One-time setup from your Mac:
+
+```bash
+# 1. Export cookies (keychain will prompt; click "Always Allow"):
+yt-dlp --cookies-from-browser chrome \
+  --cookies /tmp/yt-cookies.txt \
+  --skip-download --no-warnings \
+  "https://www.youtube.com/"
+
+# 2. Encode and push as a secret (one line, no temp file lingers):
+base64 -i /tmp/yt-cookies.txt | gh secret set YT_COOKIES_B64 \
+  -R gautjac/youtube-summaries
+
+# 3. Delete the local copy:
+rm /tmp/yt-cookies.txt
+
+# 4. Re-trigger ingestion:
+gh workflow run ingest.yml -R gautjac/youtube-summaries
+```
+
+Substitute `firefox` / `safari` / `brave` / `edge` if Chrome isn't your daily driver. Cookies expire eventually — re-run the export when ingestion starts failing with the bot-wall error.
+
 ### Firestore rules
 
 Add these rules to `~/inkwell/firestore.rules` (or wherever the project's rules live) alongside the podcast app's rules:

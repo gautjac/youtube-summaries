@@ -172,11 +172,15 @@ async function fetchVideoMeta(videoId) {
   // ─── Path A: yt-dlp metadata JSON ─────────────────────────────────────
   const ytdlp = whichSync('yt-dlp');
   if (ytdlp) {
-    const result = spawnSync(ytdlp, [
+    const args = [
       '-j', '--skip-download', '--no-warnings',
       '--extractor-args', 'youtube:player_client=android',
-      `https://www.youtube.com/watch?v=${videoId}`,
-    ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    ];
+    if (process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE)) {
+      args.push('--cookies', process.env.YT_COOKIES_FILE);
+    }
+    args.push(`https://www.youtube.com/watch?v=${videoId}`);
+    const result = spawnSync(ytdlp, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     if (result.stdout) {
       try {
         const d = JSON.parse(result.stdout);

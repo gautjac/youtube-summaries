@@ -172,9 +172,17 @@ function runYtDlpSubtitles(ytdlp, videoId, client, dir) {
     '--skip-download',
     '--no-warnings',
     '--extractor-args', `youtube:player_client=${client}`,
+  ];
+  // YT_COOKIES_FILE: path to a Netscape-format cookies.txt. Required to
+  // bypass YouTube's "Sign in to confirm you're not a bot" wall on
+  // GitHub Actions IPs. Locally optional.
+  if (process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE)) {
+    args.push('--cookies', process.env.YT_COOKIES_FILE);
+  }
+  args.push(
     '-o', path.join(dir, '%(id)s.%(ext)s'),
     `https://www.youtube.com/watch?v=${videoId}`,
-  ];
+  );
   const result = spawnSync(ytdlp, args, { encoding: 'utf8' });
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.vtt'));
   // Drop zero-byte files immediately — some clients write a stub vtt.
@@ -222,9 +230,14 @@ async function downloadAudio(videoId, outPath) {
     '-x', '--audio-format', 'mp3', '--audio-quality', '5',
     '--no-warnings',
     '--extractor-args', 'youtube:player_client=android',
+  ];
+  if (process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE)) {
+    args.push('--cookies', process.env.YT_COOKIES_FILE);
+  }
+  args.push(
     '-o', outPath.replace(/\.mp3$/, '.%(ext)s'),
     `https://www.youtube.com/watch?v=${videoId}`,
-  ];
+  );
   const result = spawnSync(ytdlp, args, { encoding: 'utf8' });
   if (!fs.existsSync(outPath)) {
     throw new Error(`yt-dlp -x produced no mp3 (exit ${result.status}: ${(result.stderr || '').slice(0, 200)})`);
